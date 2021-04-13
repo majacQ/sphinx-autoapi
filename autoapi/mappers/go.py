@@ -54,9 +54,17 @@ class GoSphinxMapper(SphinxMapperBase):
             parsed_data = json.loads(subprocess.check_output(parser_command))
             return parsed_data
         except IOError:
-            LOGGER.warning("Error reading file: {0}".format(path))
+            LOGGER.warning(
+                "Error reading file: {0}".format(path),
+                type="autoapi",
+                subtype="not_readable",
+            )
         except TypeError:
-            LOGGER.warning("Error reading file: {0}".format(path))
+            LOGGER.warning(
+                "Error reading file: {0}".format(path),
+                type="autoapi",
+                subtype="not_readable",
+            )
         return None
 
     def create_class(self, data, options=None, **kwargs):
@@ -83,7 +91,8 @@ class GoSphinxMapper(SphinxMapperBase):
             else:
                 cls = obj_map[data["type"]]
         except KeyError:
-            LOGGER.warning("Unknown Type: %s" % data)
+            # this warning intentionally has no (sub-)type
+            LOGGER.warning("Unknown type: %s" % data)
         else:
             if cls.inverted_names and "names" in data:
                 # Handle types that have reversed names parameter
