@@ -1,33 +1,35 @@
 import io
 import os
+import pathlib
 import re
 import shutil
 import sys
-from unittest.mock import patch, Mock, call
+from unittest.mock import Mock, call, patch
 
+import autoapi.settings
 import pytest
 import sphinx
-from sphinx.application import Sphinx
 import sphinx.util.logging
-
 from autoapi.mappers.python import (
-    PythonModule,
-    PythonFunction,
     PythonClass,
     PythonData,
+    PythonFunction,
     PythonMethod,
+    PythonModule,
 )
+from sphinx.application import Sphinx
+from sphinx.errors import ExtensionError
 
 
-def rebuild(confoverrides=None, **kwargs):
+def rebuild(confoverrides=None, confdir=".", **kwargs):
     app = Sphinx(
         srcdir=".",
-        confdir=".",
+        confdir=confdir,
         outdir="_build/text",
         doctreedir="_build/.doctrees",
         buildername="text",
         confoverrides=confoverrides,
-        **kwargs
+        **kwargs,
     )
     app.build()
 
@@ -51,7 +53,11 @@ def builder():
 class TestSimpleModule:
     @pytest.fixture(autouse=True, scope="class")
     def built(self, builder):
-        builder("pyexample")
+        builder(
+            "pyexample",
+            warningiserror=True,
+            confoverrides={"suppress_warnings": ["app"]},
+        )
 
     def test_integration(self):
         self.check_integration("_build/text/autoapi/example/index.txt")
@@ -74,9 +80,9 @@ class TestSimpleModule:
         assert "class Meta" in example_file
         assert "attr2" in example_file
         assert "This is the docstring of an instance attribute." in example_file
-        assert "method_okay(self, foo=None, bar=None)" in example_file
-        assert "method_multiline(self, foo=None, bar=None, baz=None)" in example_file
-        assert "method_tricky(self, foo=None, bar=dict(foo=1, bar=2))" in example_file
+        assert "method_okay(foo=None, bar=None)" in example_file
+        assert "method_multiline(foo=None, bar=None, baz=None)" in example_file
+        assert "method_tricky(foo=None, bar=dict(foo=1, bar=2))" in example_file
 
         # Are constructor arguments from the class docstring parsed?
         assert "Set an attribute" in example_file
@@ -84,11 +90,27 @@ class TestSimpleModule:
         # "self" should not be included in constructor arguments
         assert "Foo(self" not in example_file
 
+        assert "property_simple" in example_file
+        assert "This property should parse okay." in example_file
+
         # Overridden methods without their own docstring
         # should inherit the parent's docstring
         assert example_file.count("This method should parse okay") == 2
 
         assert not os.path.exists("_build/text/autoapi/method_multiline")
+
+        # Inherited constructor docstrings should be included in a merged
+        # (autoapi_python_class_content="both") class docstring only once.
+        assert example_file.count("One __init__.") == 3
+
+        # Tuples should be rendered as tuples, not lists
+        assert "('a', 'b')" in example_file
+        # Lists should be rendered as lists, not tuples
+        assert "['c', 'd']" in example_file
+
+        # Assigning a class level attribute at the module level
+        # should not get documented as a module level attribute.
+        assert "dinglebop" not in example_file
 
         index_path = "_build/text/index.txt"
         with io.open(index_path, encoding="utf8") as index_handle:
@@ -116,6 +138,67 @@ class TestSimpleModule:
 
         assert "Bases:" in example_file
 
+    def test_long_signature(self):
+        example_path = "_build/text/autoapi/example/index.txt"
+        with io.open(example_path, encoding="utf8") as example_handle:
+            example_file = example_handle.read()
+
+        summary_row = """
++------------+--------------------------------------------------------------------------------------------+
+| "fn_with_  | A function with a long signature.                                                          |
+| long_sig"  |                                                                                            |
+| (this, *[, |                                                                                            |
+| function,  |                                                                                            |
+| has,       |                                                                                            |
+| quite])    |                                                                                            |
++------------+--------------------------------------------------------------------------------------------+
+        """.strip()
+        assert summary_row in example_file
+
+        # Check length of truncated signature
+        parts = []
+        for line in summary_row.splitlines()[1:-1]:
+            part = line.split("|")[1].strip()
+            if part.endswith(","):
+                part += " "
+            parts.append(part)
+        sig_summary = "".join(parts)
+        assert len(sig_summary) <= 60
+
+
+class TestMovedConfPy(TestSimpleModule):
+    @pytest.fixture(autouse=True, scope="class")
+    def built(self, builder):
+        builder(
+            "pymovedconfpy",
+            confdir="confpy",
+            warningiserror=True,
+            confoverrides={"suppress_warnings": ["app"]},
+        )
+
+
+class TestSimpleModuleDifferentPrimaryDomain:
+    @pytest.fixture(autouse=True, scope="class")
+    def built(self, builder):
+        builder(
+            "pyexample",
+            warningiserror=True,
+            confoverrides={
+                "autoapi_options": [
+                    "members",
+                    "undoc-members",
+                    "private-members",
+                    "special-members",
+                    "imported-members",
+                ],
+                "primary_domain": "cpp",
+                "suppress_warnings": ["app"],
+            },
+        )
+
+    def test_success(self):
+        pass
+
 
 class TestSimpleStubModule:
     @pytest.fixture(autouse=True, scope="class")
@@ -134,9 +217,9 @@ class TestSimpleStubModule:
         assert "class Meta" in example_file
         assert "Another class var docstring" in example_file
         assert "A class var without a value." in example_file
-        assert "method_okay(self, foo=None, bar=None)" in example_file
-        assert "method_multiline(self, foo=None, bar=None, baz=None)" in example_file
-        assert "method_without_docstring(self)" in example_file
+        assert "method_okay(foo=None, bar=None)" in example_file
+        assert "method_multiline(foo=None, bar=None, baz=None)" in example_file
+        assert "method_without_docstring()" in example_file
 
         # Are constructor arguments from the class docstring parsed?
         assert "Set an attribute" in example_file
@@ -176,10 +259,13 @@ class TestPy3Module:
         with io.open(example_path, encoding="utf8") as example_handle:
             example_file = example_handle.read()
 
-        assert "software = sphinx" in example_file
+        assert '''software = "sphin'x"''' in example_file
+        assert """more_software = 'sphinx"autoapi'""" in example_file
+        assert "interesting_string = 'interesting\"fun\\'\\\\\\'string'" in example_file
+
         assert "code_snippet = Multiline-String" in example_file
 
-        assert "max_rating :int = 10" in example_file
+        assert "max_rating: int = 10" in example_file
         assert "is_valid" in example_file
 
         assert "ratings" in example_file
@@ -190,7 +276,10 @@ class TestPy3Module:
         assert "start: int" in example_file
         assert "Iterable[int]" in example_file
 
-        assert "List[Union[str, int]]" in example_file
+        if sys.version_info >= (3, 8):
+            assert "List[str | int]" in example_file
+        else:
+            assert "List[Union[str, int]]" in example_file
 
         assert "not_yet_a: A" in example_file
         assert "imported: example2.B" in example_file
@@ -201,9 +290,9 @@ class TestPy3Module:
 
         assert "instance_var" in example_file
 
-        assert "global_a :A" in example_file
+        assert "global_a: A" in example_file
 
-        assert "my_method(self) -> str" in example_file
+        assert "my_method() -> str" in example_file
 
         assert "class example.SomeMetaclass" in example_file
 
@@ -217,14 +306,14 @@ class TestPy3Module:
         assert "overloaded_func(a: Union" not in example_file
         assert "Overloaded function" in example_file
 
-        assert "overloaded_method(self, a: float" in example_file
-        assert "overloaded_method(self, a: str" in example_file
-        assert "overloaded_method(self, a: Union" not in example_file
+        assert "overloaded_method(a: float" in example_file
+        assert "overloaded_method(a: str" in example_file
+        assert "overloaded_method(a: Union" not in example_file
         assert "Overloaded method" in example_file
 
-        assert "overloaded_class_method(cls, a: float" in example_file
-        assert "overloaded_class_method(cls, a: str" in example_file
-        assert "overloaded_class_method(cls, a: Union" not in example_file
+        assert "overloaded_class_method(a: float" in example_file
+        assert "overloaded_class_method(a: str" in example_file
+        assert "overloaded_class_method(a: Union" not in example_file
         assert "Overloaded method" in example_file
 
         assert "undoc_overloaded_func" in example_file
@@ -270,7 +359,7 @@ class TestAnnotationCommentsModule:
         with io.open(example_path, encoding="utf8") as example_handle:
             example_file = example_handle.read()
 
-        assert "max_rating :int = 10" in example_file
+        assert "max_rating: int = 10" in example_file
 
         assert "ratings" in example_file
         assert "List[int]" in example_file
@@ -282,7 +371,10 @@ class TestAnnotationCommentsModule:
         # assert "end: int" in example_file
         assert "Iterable[int]" in example_file
 
-        assert "List[Union[str, int]]" in example_file
+        if sys.version_info >= (3, 8):
+            assert "List[str | int]" in example_file
+        else:
+            assert "List[Union[str, int]]" in example_file
 
         assert "not_yet_a: A" in example_file
         assert "is_an_a" in example_file
@@ -290,7 +382,12 @@ class TestAnnotationCommentsModule:
 
         assert "instance_var" in example_file
 
-        assert "global_a :A" in example_file
+        assert "global_a: A" in example_file
+
+        assert "class example.B(a: str)" in example_file
+        assert "method(b: list)" in example_file
+        assert "classmethod class_method(c: int)" in example_file
+        assert "static static_method(d: float)" in example_file
 
 
 @pytest.mark.skipif(
@@ -308,18 +405,32 @@ class TestPositionalOnlyArgumentsModule:
 
         assert "f_simple(a, b, /, c, d, *, e, f)" in example_file
 
-        assert (
-            "f_comment(a: int, b: int, /, c: Optional[int], d: Optional[int], *, e: float, f: float)"
-            in example_file
-        )
-        assert (
-            "f_annotation(a: int, b: int, /, c: Optional[int], d: Optional[int], *, e: float, f: float)"
-            in example_file
-        )
-        assert (
-            "f_arg_comment(a: int, b: int, /, c: Optional[int], d: Optional[int], *, e: float, f: float)"
-            in example_file
-        )
+        if sys.version_info >= (3, 8):
+            assert (
+                "f_comment(a: int, b: int, /, c: int | None, d: int | None, *, e: float, f: float)"
+                in example_file
+            )
+            assert (
+                "f_annotation(a: int, b: int, /, c: int | None, d: int | None, *, e: float, f: float)"
+                in example_file
+            )
+            assert (
+                "f_arg_comment(a: int, b: int, /, c: int | None, d: int | None, *, e: float, f: float)"
+                in example_file
+            )
+        else:
+            assert (
+                "f_comment(a: int, b: int, /, c: Optional[int], d: Optional[int], *, e: float, f: float)"
+                in example_file
+            )
+            assert (
+                "f_annotation(a: int, b: int, /, c: Optional[int], d: Optional[int], *, e: float, f: float)"
+                in example_file
+            )
+            assert (
+                "f_arg_comment(a: int, b: int, /, c: Optional[int], d: Optional[int], *, e: float, f: float)"
+                in example_file
+            )
         assert "f_no_cd(a: int, b: int, /, *, e: float, f: float)" in example_file
 
 
@@ -347,7 +458,6 @@ class TestSimplePackage:
         builder("pypackageexample")
 
     def test_integration_with_package(self):
-
         example_path = "_build/text/autoapi/example/index.txt"
         with io.open(example_path, encoding="utf8") as example_handle:
             example_file = example_handle.read()
@@ -360,7 +470,7 @@ class TestSimplePackage:
             example_foo_file = example_foo_handle.read()
 
         assert "class example.foo.Foo" in example_foo_file
-        assert "method_okay(self, foo=None, bar=None)" in example_foo_file
+        assert "method_okay(foo=None, bar=None)" in example_foo_file
 
         index_path = "_build/text/index.txt"
         with io.open(index_path, encoding="utf8") as index_handle:
@@ -710,6 +820,9 @@ class TestComplexPackageParallel:
     def built(self, builder):
         builder("pypackagecomplex", parallel=2)
 
+    def test_success(self):
+        pass
+
 
 def test_caching(builder):
     mtimes = (0, 0)
@@ -776,7 +889,15 @@ class TestImplicitNamespacePackage:
         assert "namespace.example.second_sub_method" in example_file
 
 
-def test_custom_jinja_filters(builder):
+def test_custom_jinja_filters(builder, tmp_path):
+    py_templates = tmp_path / "python"
+    py_templates.mkdir()
+    orig_py_templates = pathlib.Path(autoapi.settings.TEMPLATE_DIR) / "python"
+    orig_template = (orig_py_templates / "class.rst").read_text()
+    (py_templates / "class.rst").write_text(
+        orig_template.replace("obj.docstring", "obj.docstring|prepare_docstring")
+    )
+
     confoverrides = {
         "autoapi_prepare_jinja_env": (
             lambda jinja_env: jinja_env.filters.update(
@@ -787,6 +908,7 @@ def test_custom_jinja_filters(builder):
                 }
             )
         ),
+        "autoapi_template_dir": str(tmp_path),
     }
     builder("pyexample", confoverrides=confoverrides)
 
@@ -810,27 +932,93 @@ def test_string_module_attributes(builder):
         example_file = example_handle.read()
 
     code_snippet_contents = [
-        ".. data:: code_snippet",
-        "   :annotation: = Multiline-String",
+        ".. py:data:: code_snippet",
+        "   :value: Multiline-String",
         "",
         "    .. raw:: html",
         "",
         "        <details><summary>Show Value</summary>",
         "",
-        "    .. code-block:: text",
-        "        :linenos:",
+        "    .. code-block:: python",
         "",
+        '        """The following is some code:',
         "        ",  # <--- Line array monstrosity to preserve these leading spaces
         "        # -*- coding: utf-8 -*-",
         "        from __future__ import absolute_import, division, print_function, unicode_literals",
         "        # from future.builtins.disabled import *",
         "        # from builtins import *",
-        "",
+        "        ",
         """        print("chunky o'block")""",
-        "",
+        '        """',
         "",
         "    .. raw:: html",
         "",
         "        </details>",
     ]
     assert "\n".join(code_snippet_contents) in example_file
+
+
+class TestAutodocTypehintsPackage:
+    """Test integrations with the autodoc.typehints extension."""
+
+    @pytest.fixture(autouse=True, scope="class")
+    def built(self, builder):
+        builder("pyautodoc_typehints")
+
+    def test_renders_typehint(self):
+        example_path = "_build/text/autoapi/example/index.txt"
+        with io.open(example_path, encoding="utf8") as example_handle:
+            example_file = example_handle.read()
+
+        assert "(*int*)" in example_file
+
+    def test_renders_typehint_in_second_module(self):
+        example2_path = "_build/text/autoapi/example2/index.txt"
+        with io.open(example2_path, encoding="utf8") as example2_handle:
+            example2_file = example2_handle.read()
+
+        assert "(*int*)" in example2_file
+
+
+def test_no_files_found(builder):
+    """Test that building does not fail when no sources files are found."""
+    with pytest.raises(ExtensionError) as exc_info:
+        builder("pyemptyexample")
+
+    assert os.path.dirname(__file__) in str(exc_info.value)
+
+
+class TestMdSource:
+    @pytest.fixture(autouse=True, scope="class")
+    def built(self, builder):
+        builder(
+            "pyexample",
+            warningiserror=True,
+            confoverrides={"source_suffix": ["md"]},
+        )
+
+
+class TestMemberOrder:
+    @pytest.fixture(autouse=True, scope="class")
+    def built(self, builder):
+        builder(
+            "pyexample",
+            warningiserror=True,
+            confoverrides={
+                "suppress_warnings": ["app"],
+                "autodoc_member_order": "bysource",
+            },
+        )
+
+    def test_line_number_order(self):
+        example_path = "_build/text/manualapi.txt"
+        with io.open(example_path, encoding="utf8") as example_handle:
+            lines = example_handle.readlines()
+
+        method_tricky_pos = lines.index(
+            "   method_tricky(foo=None, bar=dict(foo=1, bar=2))\n"
+        )
+        method_sphinx_docs_pos = lines.index("   method_sphinx_docs(foo, bar=0)\n")
+
+        # method_tricky is defined in the source before method_sphinx_docs
+        assert method_tricky_pos < method_sphinx_docs_pos

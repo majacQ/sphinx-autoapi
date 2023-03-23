@@ -3,7 +3,7 @@
 from docutils.parsers.rst import Directive
 from docutils import nodes
 
-from sphinx.ext.autosummary import Autosummary
+from sphinx.ext.autosummary import Autosummary, mangle_signature
 from sphinx.util.nodes import nested_parse_with_titles
 
 from .mappers.python.objects import PythonFunction
@@ -16,6 +16,7 @@ class AutoapiSummary(Autosummary):  # pylint: disable=too-few-public-methods
         items = []
         env = self.state.document.settings.env
         all_objects = env.autoapi_all_objects
+        max_item_chars = 60
 
         for name in names:
             obj = all_objects[name]
@@ -23,11 +24,15 @@ class AutoapiSummary(Autosummary):  # pylint: disable=too-few-public-methods
                 if obj.overloads:
                     sig = "(\u2026)"
                 else:
-                    sig = "({})".format(obj.args)
+                    sig = f"({obj.args})"
                     if obj.return_annotation is not None:
-                        sig += " \u2192 {}".format(obj.return_annotation)
+                        sig += f" \u2192 {obj.return_annotation}"
             else:
                 sig = ""
+
+            if sig:
+                max_sig_chars = max(10, max_item_chars - len(obj.short_name))
+                sig = mangle_signature(sig, max_chars=max_sig_chars)
 
             item = (obj.short_name, sig, obj.summary, obj.id)
             items.append(item)
@@ -48,7 +53,6 @@ class NestedParse(Directive):  # pylint: disable=too-few-public-methods
     required_arguments = 0
     optional_arguments = 0
     final_argument_whitespace = False
-    option_spec = {}
 
     def run(self):
         node = nodes.container()

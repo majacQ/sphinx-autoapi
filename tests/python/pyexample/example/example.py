@@ -4,6 +4,11 @@
 This is a description
 """
 
+A_TUPLE = ("a", "b")
+"""A tuple to be rendered as a tuple."""
+A_LIST = ["c", "d"]
+"""A list to be rendered as a list."""
+
 
 class Foo(object):
     """Can we parse arguments from the class docstring?
@@ -33,6 +38,11 @@ class Foo(object):
 
         :type: str
         """
+
+    @property
+    def property_simple(self) -> int:
+        """This property should parse okay."""
+        return 42
 
     def method_okay(self, foo=None, bar=None):
         """This method should parse okay"""
@@ -95,6 +105,9 @@ class Foo(object):
         return "google"
 
 
+Foo.bar = "dinglebop"
+
+
 def decorator_okay(func):
     """This decorator should parse okay."""
 
@@ -107,3 +120,40 @@ def decorator_okay(func):
 class Bar(Foo):
     def method_okay(self, foo=None, bar=None):
         pass
+
+
+class ClassWithNoInit:
+    pass
+
+
+class One:
+    """One."""
+
+    def __init__(self):
+        """One __init__."""
+        super().__init__()
+
+
+class MultilineOne(One):
+    """This is a naughty summary line
+    that exists on two lines."""
+
+
+class Two(One):
+    """Two."""
+
+
+def fn_with_long_sig(
+    this,
+    *,
+    function=None,
+    has=True,
+    quite=True,
+    a,
+    long,
+    signature,
+    many,
+    keyword,
+    arguments
+):
+    """A function with a long signature."""

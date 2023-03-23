@@ -104,7 +104,7 @@ class TestIntegration(LanguageIntegrationTests):
         self._run_test(
             "templateexample",
             "_build/text/autoapi/example/index.txt",
-            "This is a fuction template override",
+            "This is a function template override",
         )
 
 
@@ -121,7 +121,7 @@ class TestTOCTree(LanguageIntegrationTests):
 
 class TestExtensionErrors:
     @pytest.fixture(autouse=True)
-    def unload_go_and_dotned_libraries(self):
+    def unload_go_and_dotnet_libraries(self):
         # unload dotnet and golang domain libraries, because they may be imported before
         for mod_name in ("sphinxcontrib.dotnetdomain", "sphinxcontrib.golangdomain"):
             try:
@@ -136,7 +136,7 @@ class TestExtensionErrors:
                 "toctreeexample",
                 {"autoapi_type": "INVALID VALUE"},
                 (
-                    "Invalid autoapi_type setting, following values is "
+                    "Invalid autoapi_type setting, following values are "
                     'allowed: "dotnet", "go", "javascript", "python"'
                 ),
             ),

@@ -6,9 +6,8 @@ import re
 from jinja2 import Environment, FileSystemLoader, TemplateNotFound
 import sphinx
 import sphinx.util
-from sphinx.util.console import darkgreen, bold
+from sphinx.util.console import colorize
 from sphinx.util.osutil import ensuredir
-from sphinx.util.docstrings import prepare_docstring
 import sphinx.util.logging
 import unidecode
 
@@ -35,7 +34,7 @@ class PythonMapperBase:
 
     Required attributes:
 
-    :var str id: A globally unique indentifier for this object.
+    :var str id: A globally unique identifier for this object.
                  Generally a fully qualified name, including namespace.
     :var str name: A short "display friendly" name for this object.
 
@@ -75,14 +74,10 @@ class PythonMapperBase:
 
         ctx = {}
         try:
-            template = self.jinja_env.get_template(
-                "{language}/{type}.rst".format(language=self.language, type=self.type)
-            )
+            template = self.jinja_env.get_template(f"{self.language}/{self.type}.rst")
         except TemplateNotFound:
             # Use a try/except here so we fallback to language specific defaults, over base defaults
-            template = self.jinja_env.get_template(
-                "base/{type}.rst".format(type=self.type)
-            )
+            template = self.jinja_env.get_template(f"base/{self.type}.rst")
 
         ctx.update(**self.get_context_data())
         ctx.update(**kwargs)
@@ -105,10 +100,10 @@ class PythonMapperBase:
         """Object sorting comparison"""
         if isinstance(other, PythonMapperBase):
             return self.id < other.id
-        return super(PythonMapperBase, self).__lt__(other)
+        return super().__lt__(other)
 
     def __str__(self):
-        return "<{cls} {id}>".format(cls=self.__class__.__name__, id=self.id)
+        return f"<{self.__class__.__name__} {self.id}>"
 
     @property
     def short_name(self):
@@ -122,7 +117,7 @@ class PythonMapperBase:
         Slugs to a filename using the follow steps
 
         * Decode unicode to approximate ascii
-        * Remove existing hypens
+        * Remove existing hyphens
         * Substitute hyphens for non-word characters
         * Break up the string as paths
         """
@@ -190,7 +185,7 @@ class SphinxMapperBase:
         )
 
         def _wrapped_prepare(value):
-            return "\n".join(prepare_docstring(value))
+            return value
 
         self.jinja_env.filters["prepare_docstring"] = _wrapped_prepare
         if self.app.config.autoapi_prepare_jinja_env:
@@ -216,7 +211,10 @@ class SphinxMapperBase:
         """
         paths = list(self.find_files(patterns=patterns, dirs=dirs, ignore=ignore))
         for path in sphinx.util.status_iterator(
-            paths, bold("[AutoAPI] Reading files... "), "darkgreen", len(paths)
+            paths,
+            colorize("bold", "[AutoAPI] Reading files... "),
+            "darkgreen",
+            len(paths),
         ):
             data = self.read_file(path=path)
             if data:
@@ -253,8 +251,10 @@ class SphinxMapperBase:
                                 os.path.join(root, filename), ignore_pattern
                             ):
                                 LOGGER.info(
-                                    bold("[AutoAPI] ")
-                                    + darkgreen("Ignoring %s/%s" % (root, filename))
+                                    colorize("bold", "[AutoAPI] ")
+                                    + colorize(
+                                        "darkgreen", f"Ignoring {root}/{filename}"
+                                    )
                                 )
                                 skip = True
 
@@ -295,7 +295,7 @@ class SphinxMapperBase:
         """Trigger find of serialized sources and build objects"""
         for _, data in sphinx.util.status_iterator(
             self.paths.items(),
-            bold("[AutoAPI] ") + "Mapping Data... ",
+            colorize("bold", "[AutoAPI] ") + "Mapping Data... ",
             length=len(self.paths),
             stringify_func=(lambda x: x[0]),
         ):
@@ -313,9 +313,9 @@ class SphinxMapperBase:
     def output_rst(self, root, source_suffix):
         for _, obj in sphinx.util.status_iterator(
             self.objects.items(),
-            bold("[AutoAPI] ") + "Rendering Data... ",
+            colorize("bold", "[AutoAPI] ") + "Rendering Data... ",
             length=len(self.objects),
-            verbosity="INFO",
+            verbosity=1,
             stringify_func=(lambda x: x[0]),
         ):
             rst = obj.render()
@@ -324,7 +324,7 @@ class SphinxMapperBase:
 
             detail_dir = obj.include_dir(root=root)
             ensuredir(detail_dir)
-            path = os.path.join(detail_dir, "%s%s" % ("index", source_suffix))
+            path = os.path.join(detail_dir, f"index{source_suffix}")
             with open(path, "wb+") as detail_file:
                 detail_file.write(rst.encode("utf-8"))
 

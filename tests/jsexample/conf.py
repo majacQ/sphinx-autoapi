@@ -3,12 +3,12 @@
 templates_path = ["_templates"]
 source_suffix = ".rst"
 master_doc = "index"
-project = u"jsexample"
-copyright = u"2015, readthedocs"
-author = u"readthedocs"
+project = "jsexample"
+copyright = "2015, readthedocs"
+author = "readthedocs"
 version = "0.1"
 release = "0.1"
-language = None
+language = "en"
 exclude_patterns = ["_build"]
 pygments_style = "sphinx"
 todo_include_todos = False

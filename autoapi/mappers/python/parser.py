@@ -4,7 +4,13 @@ import os
 
 import astroid
 import astroid.builder
+import sphinx.util.docstrings
+
 from . import astroid_utils
+
+
+def _prepare_docstring(doc):
+    return "\n".join(sphinx.util.docstrings.prepare_docstring(doc))
 
 
 class Parser:
@@ -43,9 +49,20 @@ class Parser:
         )
 
     def parse_annassign(self, node):
-        return self.parse_assign(node)
+        # Don't document module level assignments to class attributes
+        if isinstance(node.target, astroid.nodes.AssignAttr):
+            return []
+
+        return self._parse_assign(node)
 
     def parse_assign(self, node):
+        # Don't document module level assignments to class attributes
+        if any(isinstance(target, astroid.nodes.AssignAttr) for target in node.targets):
+            return []
+
+        return self._parse_assign(node)
+
+    def _parse_assign(self, node):
         doc = ""
         doc_node = node.next_sibling()
         if isinstance(doc_node, astroid.nodes.Expr) and isinstance(
@@ -72,7 +89,7 @@ class Parser:
             "type": type_,
             "name": target,
             "full_name": self._get_full_name(target),
-            "doc": doc,
+            "doc": _prepare_docstring(doc),
             "value": value,
             "from_line_no": node.fromlineno,
             "to_line_no": node.tolineno,
@@ -86,24 +103,14 @@ class Parser:
         if astroid_utils.is_exception(node):
             type_ = "exception"
 
-        args = []
-        try:
-            constructor = node.lookup("__init__")[1]
-        except IndexError:
-            pass
-        else:
-            if isinstance(constructor, astroid.nodes.FunctionDef):
-                args = astroid_utils.get_args_info(constructor.args)
-
         basenames = list(astroid_utils.get_full_basenames(node))
 
         data = {
             "type": type_,
             "name": node.name,
             "full_name": self._get_full_name(node.name),
-            "args": args,
             "bases": basenames,
-            "doc": astroid_utils.get_class_docstring(node),
+            "doc": _prepare_docstring(astroid_utils.get_class_docstring(node)),
             "from_line_no": node.fromlineno,
             "to_line_no": node.tolineno,
             "children": [],
@@ -154,25 +161,30 @@ class Parser:
 
         if node.type == "function":
             type_ = "function"
+
+            if isinstance(node, astroid.AsyncFunctionDef):
+                properties.append("async")
         elif astroid_utils.is_decorated_with_property(node):
             type_ = "property"
-            properties.append("property")
+            if node.type == "classmethod":
+                properties.append(node.type)
+            if node.is_abstract(pass_is_abstract=False):
+                properties.append("abstractmethod")
         else:
             # "__new__" method is implicit classmethod
             if node.type in ("staticmethod", "classmethod") and node.name != "__new__":
                 properties.append(node.type)
             if node.is_abstract(pass_is_abstract=False):
                 properties.append("abstractmethod")
-
-        if isinstance(node, astroid.AsyncFunctionDef):
-            properties.append("async")
+            if isinstance(node, astroid.AsyncFunctionDef):
+                properties.append("async")
 
         data = {
             "type": type_,
             "name": node.name,
             "full_name": self._get_full_name(node.name),
             "args": astroid_utils.get_args_info(node.args),
-            "doc": astroid_utils.get_func_docstring(node),
+            "doc": _prepare_docstring(astroid_utils.get_func_docstring(node)),
             "from_line_no": node.fromlineno,
             "to_line_no": node.tolineno,
             "return_annotation": astroid_utils.get_return_annotation(node),
@@ -181,15 +193,12 @@ class Parser:
             "overloads": [],
         }
 
-        if type_ in ("method", "property"):
-            data["method_type"] = node.type
-
         result = [data]
 
         if node.name == "__init__":
             for child in node.get_children():
                 if isinstance(child, (astroid.nodes.Assign, astroid.nodes.AnnAssign)):
-                    child_data = self.parse_assign(child)
+                    child_data = self._parse_assign(child)
                     result.extend(data for data in child_data if data["doc"])
 
         return result
@@ -228,7 +237,7 @@ class Parser:
             "type": type_,
             "name": node.name,
             "full_name": node.name,
-            "doc": node.doc or "",
+            "doc": _prepare_docstring(node.doc or ""),
             "children": [],
             "file_path": path,
             "encoding": node.file_encoding,

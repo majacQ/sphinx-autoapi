@@ -27,7 +27,7 @@ autoapi_dirs = ['../autoapi']
 autoapi_generate_api_docs = False
 
 intersphinx_mapping = {
-    'jinja': ('https://jinja.palletsprojects.com/en/master/', None),
+    'jinja': ('https://jinja.palletsprojects.com/en/3.0.x/', None),
     'sphinx': ('https://www.sphinx-doc.org/en/master/', None),
     'python': ('https://docs.python.org/3/', None),
 }
@@ -63,7 +63,7 @@ release = autoapi.__version__
 #
 # This is also used if you do content translation via gettext catalogs.
 # Usually you set "language" from the command line for these cases.
-language = None
+language = "en"
 
 # There are two options for replacing |today|: either, you set today to some
 # non-false value, then it is used:
@@ -310,6 +310,6 @@ def setup(app):
                         objname='configuration value',
                         indextemplate='pair: %s; configuration value')
     fdesc = TypedField('parameter', label='Parameters',
-                         names=['param'], typenames=['type'], can_collapse=True)
+                         names=('param',), typenames=('type',), can_collapse=True)
     app.add_object_type('event', 'event', 'pair: %s; event', parse_event,
                         doc_field_types=[fdesc])

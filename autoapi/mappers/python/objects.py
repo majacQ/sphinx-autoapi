@@ -1,4 +1,5 @@
-from typing import Optional
+import functools
+from typing import List, Optional
 
 import sphinx.util.logging
 
@@ -8,15 +9,17 @@ from ..base import PythonMapperBase
 LOGGER = sphinx.util.logging.getLogger(__name__)
 
 
-def _format_args(args_info, include_annotations=True):
+def _format_args(args_info, include_annotations=True, ignore_self=None):
     result = []
 
-    for prefix, name, annotation, default in args_info:
-        formatted = "{}{}{}{}".format(
-            prefix or "",
-            name or "",
-            ": {}".format(annotation) if annotation and include_annotations else "",
-            (" = {}" if annotation else "={}").format(default) if default else "",
+    for i, (prefix, name, annotation, default) in enumerate(args_info):
+        if i == 0 and ignore_self is not None and name == ignore_self:
+            continue
+        formatted = (
+            (prefix or "")
+            + (name or "")
+            + (f": {annotation}" if annotation and include_annotations else "")
+            + ((" = {}" if annotation else "={}").format(default) if default else "")
         )
         result.append(formatted)
 
@@ -38,15 +41,16 @@ class PythonPythonMapper(PythonMapperBase):
     is_callable = False
     member_order = 0
 
-    def __init__(self, obj, class_content="class", **kwargs):
-        super(PythonPythonMapper, self).__init__(obj, **kwargs)
+    def __init__(self, obj, class_content="class", **kwargs) -> None:
+        super().__init__(obj, **kwargs)
 
         self.name = obj["name"]
         self.id = obj.get("full_name", self.name)
 
         # Optional
-        self.children = []
-        self.docstring = obj["doc"]
+        self.children: List[PythonPythonMapper] = []
+        self._docstring = obj["doc"]
+        self._docstring_resolved = False
         self.imported = "original_path" in obj
         self.inherited = obj.get("inherited", False)
         """Whether this was inherited from an ancestor of the parent class.
@@ -57,7 +61,7 @@ class PythonPythonMapper(PythonMapperBase):
         # For later
         self._class_content = class_content
 
-        self._display_cache = None  # type: Optional[bool]
+        self._display_cache: Optional[bool] = None
 
     @property
     def docstring(self):
@@ -76,6 +80,7 @@ class PythonPythonMapper(PythonMapperBase):
     @docstring.setter
     def docstring(self, value):
         self._docstring = value
+        self._docstring_resolved = True
 
     @property
     def is_undoc_member(self):
@@ -164,16 +169,20 @@ class PythonFunction(PythonPythonMapper):
 
     type = "function"
     is_callable = True
-    member_order = 40
+    member_order = 30
 
     def __init__(self, obj, **kwargs):
-        super(PythonFunction, self).__init__(obj, **kwargs)
+        super().__init__(obj, **kwargs)
 
         autodoc_typehints = getattr(self.app.config, "autodoc_typehints", "signature")
         show_annotations = autodoc_typehints != "none" and not (
             autodoc_typehints == "description" and not obj["overloads"]
         )
         self.args = _format_args(obj["args"], show_annotations)
+        """The arguments to this object, formatted as a string.
+
+        :type: str
+        """
 
         self.return_annotation = obj["return_annotation"] if show_annotations else None
         """The type annotation for the return type of this function.
@@ -199,18 +208,6 @@ class PythonFunction(PythonPythonMapper):
         :type: list(tuple(str, str))
         """
 
-    @property
-    def args(self):
-        """The arguments to this object, formatted as a string.
-
-        :type: str
-        """
-        return self._args
-
-    @args.setter
-    def args(self, value):
-        self._args = value
-
 
 class PythonMethod(PythonFunction):
     """The representation of a method."""
@@ -220,15 +217,8 @@ class PythonMethod(PythonFunction):
     member_order = 50
 
     def __init__(self, obj, **kwargs):
-        super(PythonMethod, self).__init__(obj, **kwargs)
+        super().__init__(obj, **kwargs)
 
-        self.method_type = obj.get("method_type")
-        """The type of method that this object represents.
-
-        This can be one of: method, staticmethod, or classmethod.
-
-        :type: str
-        """
         self.properties = obj["properties"]
         """The properties that describe what type of method this is.
 
@@ -238,21 +228,44 @@ class PythonMethod(PythonFunction):
         """
 
     def _should_skip(self):  # type: () -> bool
-        skip = super(PythonMethod, self)._should_skip() or self.name in (
+        skip = super()._should_skip() or self.name in (
             "__new__",
             "__init__",
         )
         return self._ask_ignore(skip)
 
 
+class PythonProperty(PythonPythonMapper):
+    """The representation of a property on a class."""
+
+    type = "property"
+    member_order = 60
+
+    def __init__(self, obj, **kwargs):
+        super().__init__(obj, **kwargs)
+
+        self.annotation = obj["return_annotation"]
+        """The type annotation of this property.
+
+        :type: str or None
+        """
+        self.properties = obj["properties"]
+        """The properties that describe what type of property this is.
+
+        Can be any of: abstractmethod, classmethod
+
+        :type: list(str)
+        """
+
+
 class PythonData(PythonPythonMapper):
     """Global, module level data."""
 
     type = "data"
-    member_order = 10
+    member_order = 40
 
     def __init__(self, obj, **kwargs):
-        super(PythonData, self).__init__(obj, **kwargs)
+        super().__init__(obj, **kwargs)
 
         self.value = obj.get("value")
         """The value of this attribute.
@@ -275,7 +288,7 @@ class PythonAttribute(PythonData):
     """An object/class level attribute."""
 
     type = "attribute"
-    member_order = 10
+    member_order = 60
 
 
 class TopLevelPythonPythonMapper(PythonPythonMapper):
@@ -284,7 +297,7 @@ class TopLevelPythonPythonMapper(PythonPythonMapper):
     _RENDER_LOG_LEVEL = "VERBOSE"
 
     def __init__(self, obj, **kwargs):
-        super(TopLevelPythonPythonMapper, self).__init__(obj, **kwargs)
+        super().__init__(obj, **kwargs)
 
         self.top_level_object = "." not in self.name
         """Whether this object is at the very top level (True) or not (False).
@@ -338,12 +351,10 @@ class PythonClass(PythonPythonMapper):
     """The representation of a class."""
 
     type = "class"
-    member_order = 30
+    member_order = 20
 
     def __init__(self, obj, **kwargs):
-        super(PythonClass, self).__init__(obj, **kwargs)
-
-        self.args = obj["args"]
+        super().__init__(obj, **kwargs)
 
         self.bases = obj["bases"]
         """The fully qualified names of all base classes.
@@ -357,31 +368,50 @@ class PythonClass(PythonPythonMapper):
 
         :type: str
         """
-        args = self._args
+        args = ""
 
-        constructor = self.constructor
-        if constructor:
-            args = constructor.args
-
-        if args.startswith("self"):
-            args = args[4:].lstrip(",").lstrip()
+        if self.constructor:
+            autodoc_typehints = getattr(
+                self.app.config, "autodoc_typehints", "signature"
+            )
+            show_annotations = autodoc_typehints != "none" and not (
+                autodoc_typehints == "description" and not self.constructor.overloads
+            )
+            args_data = self.constructor.obj["args"]
+            args = _format_args(args_data, show_annotations, ignore_self="self")
 
         return args
 
-    @args.setter
-    def args(self, value):
-        self._args = value
+    @property
+    def overloads(self):
+        overloads = []
+
+        if self.constructor:
+            overload_data = self.constructor.obj["overloads"]
+            autodoc_typehints = getattr(
+                self.app.config, "autodoc_typehints", "signature"
+            )
+            show_annotations = autodoc_typehints not in ("none", "description")
+            overloads = [
+                (
+                    _format_args(args, show_annotations, ignore_self="self"),
+                    return_annotation,
+                )
+                for args, return_annotation in overload_data
+            ]
+
+        return overloads
 
     @property
     def docstring(self):
-        docstring = super(PythonClass, self).docstring
+        docstring = super().docstring
 
-        if self._class_content in ("both", "init"):
+        if not self._docstring_resolved and self._class_content in ("both", "init"):
             constructor_docstring = self.constructor_docstring
 
             if constructor_docstring:
                 if self._class_content == "both":
-                    docstring = "{0}\n{1}".format(docstring, constructor_docstring)
+                    docstring = f"{docstring}\n{constructor_docstring}"
                 else:
                     docstring = constructor_docstring
 
@@ -389,11 +419,15 @@ class PythonClass(PythonPythonMapper):
 
     @docstring.setter
     def docstring(self, value):
-        self._docstring = value
+        super(PythonClass, self.__class__).docstring.fset(self, value)
 
     @property
     def methods(self):
         return self._children_of_type("method")
+
+    @property
+    def properties(self):
+        return self._children_of_type("property")
 
     @property
     def attributes(self):
@@ -404,6 +438,7 @@ class PythonClass(PythonPythonMapper):
         return self._children_of_type("class")
 
     @property
+    @functools.lru_cache()
     def constructor(self):
         for child in self.children:
             if child.short_name == "__init__":
@@ -431,4 +466,4 @@ class PythonException(PythonClass):
     """The representation of an exception class."""
 
     type = "exception"
-    member_order = 20
+    member_order = 10

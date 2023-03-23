@@ -1,14 +1,15 @@
+from collections import defaultdict
 import re
 import os
 import subprocess
 import traceback
 import shutil
-from collections import defaultdict
+from typing import Dict
 import unidecode
 
 import yaml
 from sphinx.util.osutil import ensuredir
-from sphinx.util.console import darkgreen, bold
+from sphinx.util.console import colorize
 import sphinx.util.logging
 from sphinx.errors import ExtensionError
 
@@ -56,7 +57,7 @@ class DotNetSphinxMapper(SphinxMapperBase):
     :param app: Sphinx application passed in as part of the extension
     """
 
-    top_namespaces = {}
+    top_namespaces: Dict[str, "DotNetNamespace"] = {}
 
     DOCFX_OUTPUT_PATH = "_api"
 
@@ -69,7 +70,9 @@ class DotNetSphinxMapper(SphinxMapperBase):
         the canonical source before the default patterns.  Fallback to default
         pattern matches if no ``docfx.json`` files are found.
         """
-        LOGGER.info(bold("[AutoAPI] ") + darkgreen("Loading Data"))
+        LOGGER.info(
+            colorize("bold", "[AutoAPI] ") + colorize("darkgreen", "Loading Data")
+        )
         all_files = set()
         if not self.app.config.autoapi_file_patterns:
             all_files = set(
@@ -83,8 +86,9 @@ class DotNetSphinxMapper(SphinxMapperBase):
         if all_files:
             command = ["docfx", "metadata", "--raw", "--force"]
             command.extend(all_files)
-            proc = subprocess.Popen(
-                " ".join(command),
+            proc = subprocess.run(
+                command,
+                check=False,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 shell=True,
@@ -100,9 +104,8 @@ class DotNetSphinxMapper(SphinxMapperBase):
                     if key in os.environ
                 ),
             )
-            _, error_output = proc.communicate()
-            if error_output:
-                LOGGER.warning(error_output, type="autoapi", subtype="not_readable")
+            if proc.stderr:
+                LOGGER.warning(proc.stderr, type="autoapi", subtype="not_readable")
         # We now have yaml files
         for xdoc_path in self.find_files(
             patterns=["*.yml"], dirs=[self.DOCFX_OUTPUT_PATH], ignore=ignore
@@ -119,18 +122,18 @@ class DotNetSphinxMapper(SphinxMapperBase):
         :param path: Path of file to read
         """
         try:
-            with open(path, "r") as handle:
+            with open(path, "r", encoding="utf-8") as handle:
                 parsed_data = yaml.safe_load(handle)
                 return parsed_data
         except IOError:
             LOGGER.warning(
-                "Error reading file: {0}".format(path),
+                f"Error reading file: {path}",
                 type="autoapi",
                 subtype="not_readable",
             )
         except TypeError:
             LOGGER.warning(
-                "Error reading file: {0}".format(path),
+                f"Error reading file: {path}",
                 type="autoapi",
                 subtype="not_readable",
             )
@@ -141,7 +144,7 @@ class DotNetSphinxMapper(SphinxMapperBase):
         """Trigger find of serialized sources and build objects"""
         for _, data in sphinx.util.status_iterator(
             self.paths.items(),
-            bold("[AutoAPI] ") + "Mapping Data... ",
+            colorize("bold", "[AutoAPI] ") + "Mapping Data... ",
             length=len(self.paths),
             stringify_func=(lambda x: x[0]),
         ):
@@ -173,7 +176,7 @@ class DotNetSphinxMapper(SphinxMapperBase):
             cls = obj_map[data["type"].lower()]
         except KeyError:
             # this warning intentionally has no (sub-)type
-            LOGGER.warning("Unknown type: %s" % data)
+            LOGGER.warning(f"Unknown type: {data}")
         else:
             obj = cls(
                 data, jinja_env=self.jinja_env, app=self.app, options=options, **kwargs
@@ -242,7 +245,7 @@ class DotNetSphinxMapper(SphinxMapperBase):
 
         for _, obj in sphinx.util.status_iterator(
             self.objects.items(),
-            bold("[AutoAPI] ") + "Rendering Data... ",
+            colorize("bold", "[AutoAPI] ") + "Rendering Data... ",
             length=len(self.objects),
             stringify_func=(lambda x: x[0]),
         ):
@@ -255,7 +258,7 @@ class DotNetSphinxMapper(SphinxMapperBase):
 
             detail_dir = os.path.join(root, obj.pathname)
             ensuredir(detail_dir)
-            path = os.path.join(detail_dir, "%s%s" % ("index", source_suffix))
+            path = os.path.join(detail_dir, f"index{source_suffix}")
             with open(path, "wb") as detail_file:
                 detail_file.write(rst.encode("utf-8"))
 
@@ -270,7 +273,10 @@ class DotNetSphinxMapper(SphinxMapperBase):
     @staticmethod
     def build_finished(app, _):
         if app.verbosity > 1:
-            LOGGER.info(bold("[AutoAPI] ") + darkgreen("Cleaning generated .yml files"))
+            LOGGER.info(
+                colorize("bold", "[AutoAPI] ")
+                + colorize("darkgreen", "Cleaning generated .yml files")
+            )
         if os.path.exists(DotNetSphinxMapper.DOCFX_OUTPUT_PATH):
             shutil.rmtree(DotNetSphinxMapper.DOCFX_OUTPUT_PATH)
 
@@ -291,7 +297,7 @@ class DotNetPythonMapper(PythonMapperBase):
             for obj in kwargs.pop("references", [])
             if "uid" in obj
         )
-        super(DotNetPythonMapper, self).__init__(obj, **kwargs)
+        super().__init__(obj, **kwargs)
 
         # Always exist
         self.id = obj.get("uid", obj.get("id"))
@@ -350,7 +356,7 @@ class DotNetPythonMapper(PythonMapperBase):
         ]
 
     def __str__(self):
-        return "<{cls} {id}>".format(cls=self.__class__.__name__, id=self.id)
+        return f"<{self.__class__.__name__} {self.id}>"
 
     @property
     def pathname(self):
@@ -359,7 +365,7 @@ class DotNetPythonMapper(PythonMapperBase):
         Slugs to a filename using the follow steps
 
         * Decode unicode to approximate ascii
-        * Remove existing hypens
+        * Remove existing hyphens
         * Substitute hyphens for non-word characters
         * Break up the string as paths
         """
@@ -383,7 +389,7 @@ class DotNetPythonMapper(PythonMapperBase):
         try:
             repo = self.source["remote"]["repo"].replace(".git", "")
             path = self.path
-            return "{repo}/blob/master/{path}".format(repo=repo, path=path)
+            return f"{repo}/blob/master/{path}"
         except KeyError:
             return ""
 
@@ -429,7 +435,7 @@ class DotNetPythonMapper(PythonMapperBase):
         As the `<T>` notation is also special syntax in references, indicating
         the reference to Foo.Bar should be named T.
 
-        See: http://sphinx-doc.org/domains.html#role-cpp:any
+        See: https://www.sphinx-doc.org/en/master/#role-cpp:any
         """
         return self.name.replace("<", r"\<").replace("`", r"\`")
 
@@ -466,11 +472,11 @@ class DotNetPythonMapper(PythonMapperBase):
                 if ref[1] == ":" and ref[0] in DOC_COMMENT_IDENTITIES:
                     reftype = DOC_COMMENT_IDENTITIES[ref[:1]]
                     ref = ref[2:]
-                    replacement = ":{reftype}:`{ref}`".format(reftype=reftype, ref=ref)
+                    replacement = f":{reftype}:`{ref}`"
                 elif ref[:2] == "!:":
                     replacement = ref[2:]
                 else:
-                    replacement = ":any:`{ref}`".format(ref=ref)
+                    replacement = f":any:`{ref}`"
 
                 # Escape following text
                 text_end = text[found.end() :]
@@ -529,7 +535,7 @@ class DotNetPythonMapper(PythonMapperBase):
             elif part.get("name") == ">":
                 parts.append("}")
             elif "fullName" in part and "uid" in part:
-                parts.append("{fullName}<{uid}>".format(**part))
+                parts.append(f"{part['fullName']}<{part['uid']}>")
             elif "uid" in part:
                 parts.append(part["uid"])
             elif "fullName" in part:

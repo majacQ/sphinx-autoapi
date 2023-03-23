@@ -5,8 +5,9 @@ import os
 import re
 
 import sphinx.environment
+from sphinx.errors import ExtensionError
 import sphinx.util
-from sphinx.util.console import bold
+from sphinx.util.console import colorize
 import sphinx.util.docstrings
 import sphinx.util.logging
 
@@ -18,6 +19,7 @@ from .objects import (
     PythonModule,
     PythonMethod,
     PythonPackage,
+    PythonProperty,
     PythonAttribute,
     PythonData,
     PythonException,
@@ -49,9 +51,7 @@ def _expand_wildcard_placeholder(original_module, originals_map, placeholder):
                 continue
 
             if name not in originals_map:
-                msg = "Invalid __all__ entry {0} in {1}".format(
-                    name, original_module["name"]
-                )
+                msg = f"Invalid __all__ entry {name} in {original_module['name']}"
                 LOGGER.warning(msg, type="autoapi", subtype="python_import_resolution")
                 continue
 
@@ -104,18 +104,15 @@ def _resolve_module_placeholders(modules, module_name, visit_path, resolved):
 
         imported_from, original_name = child["original_path"].rsplit(".", 1)
         if imported_from in visit_path:
-            msg = "Cannot resolve cyclic import: {0}, {1}".format(
-                ", ".join(visit_path), imported_from
-            )
+            visit_str = ", ".join(visit_path)
+            msg = f"Cannot resolve cyclic import: {visit_str}, {imported_from}"
             LOGGER.warning(msg, type="autoapi", subtype="python_import_resolution")
             module["children"].remove(child)
             children.pop(child["name"])
             continue
 
         if imported_from not in modules:
-            msg = "Cannot resolve import of unknown module {0} in {1}".format(
-                imported_from, module_name
-            )
+            msg = f"Cannot resolve import of unknown module {imported_from} in {module_name}"
             LOGGER.warning(msg, type="autoapi", subtype="python_import_resolution")
             module["children"].remove(child)
             children.pop(child["name"])
@@ -141,9 +138,7 @@ def _resolve_module_placeholders(modules, module_name, visit_path, resolved):
                 original = originals_map[new_placeholder["name"]]
                 _resolve_placeholder(new_placeholder, original)
         elif original_name not in modules[imported_from][1]:
-            msg = "Cannot resolve import of {0} in {1}".format(
-                child["original_path"], module_name
-            )
+            msg = f"Cannot resolve import of {child['original_path']} in {module_name}"
             LOGGER.warning(msg, type="autoapi", subtype="python_import_resolution")
             module["children"].remove(child)
             children.pop(child["name"])
@@ -236,15 +231,15 @@ class PythonSphinxMapper(SphinxMapperBase):
             PythonModule,
             PythonMethod,
             PythonPackage,
+            PythonProperty,
             PythonAttribute,
             PythonData,
             PythonException,
         )
     }
-    _OBJ_MAP["property"] = PythonMethod
 
     def __init__(self, app, template_dir=None, url_root=None):
-        super(PythonSphinxMapper, self).__init__(app, template_dir, url_root)
+        super().__init__(app, template_dir, url_root)
 
         self.jinja_env.filters["link_objs"] = _link_objs
         self._use_implicit_namespace = (
@@ -286,6 +281,9 @@ class PythonSphinxMapper(SphinxMapperBase):
         shortened, relative path the package/module
         """
         dir_root_files = list(self._find_files(patterns, dirs, ignore))
+        if not dir_root_files:
+            raise ExtensionError(f"No source files found in: {','.join(dirs)}")
+
         if not self._need_to_load(dir_root_files):
             LOGGER.debug(
                 "[AutoAPI] Skipping read stage because source files have not changed."
@@ -294,7 +292,7 @@ class PythonSphinxMapper(SphinxMapperBase):
 
         for dir_root, path in sphinx.util.status_iterator(
             dir_root_files,
-            bold("[AutoAPI] Reading files... "),
+            colorize("bold", "[AutoAPI] Reading files... "),
             length=len(dir_root_files),
             stringify_func=(lambda x: x[1]),
         ):
@@ -320,7 +318,7 @@ class PythonSphinxMapper(SphinxMapperBase):
         except (IOError, TypeError, ImportError):
             LOGGER.debug("Reason:", exc_info=True)
             LOGGER.warning(
-                "Unable to read file: {0}".format(path),
+                f"Unable to read file: {path}",
                 type="autoapi",
                 subtype="not_readable",
             )
@@ -340,20 +338,24 @@ class PythonSphinxMapper(SphinxMapperBase):
 
     def map(self, options=None):
         self._resolve_placeholders()
+        self.app.env.autoapi_annotations = {}
 
-        super(PythonSphinxMapper, self).map(options)
+        super().map(options)
 
         parents = {obj.name: obj for obj in self.objects.values()}
         for obj in self.objects.values():
             parent_name = obj.name.rsplit(".", 1)[0]
             if parent_name in parents and parent_name != obj.name:
                 parent = parents[parent_name]
-                attr = "sub{}s".format(obj.type)
+                attr = f"sub{obj.type}s"
                 getattr(parent, attr).append(obj)
 
         for obj in self.objects.values():
             obj.submodules.sort()
             obj.subpackages.sort()
+
+        self.app.env.autoapi_objects = self.objects
+        self.app.env.autoapi_all_objects = self.all_objects
 
     def create_class(self, data, options=None, **kwargs):
         """Create a class from the passed in data
@@ -364,7 +366,7 @@ class PythonSphinxMapper(SphinxMapperBase):
             cls = self._OBJ_MAP[data["type"]]
         except KeyError:
             # this warning intentionally has no (sub-)type
-            LOGGER.warning("Unknown type: %s" % data["type"])
+            LOGGER.warning(f"Unknown type: {data['type']}")
         else:
             obj = cls(
                 data,
@@ -376,19 +378,30 @@ class PythonSphinxMapper(SphinxMapperBase):
             )
             obj.url_root = self.url_root
 
-            lines = sphinx.util.docstrings.prepare_docstring(obj.docstring)
-            if lines and "autodoc-process-docstring" in self.app.events.events:
-                self.app.emit(
-                    "autodoc-process-docstring", cls.type, obj.name, None, None, lines
-                )
-            obj.docstring = "\n".join(lines)
-            self._record_typehints(obj)
-
             for child_data in data.get("children", []):
                 for child_obj in self.create_class(
                     child_data, options=options, **kwargs
                 ):
                     obj.children.append(child_obj)
+
+            # Some objects require children to establish their docstring
+            # or type annotations (eg classes with inheritance),
+            # so do this after all children have been created.
+            lines = obj.docstring.splitlines()
+            if lines:
+                # Add back the trailing newline that .splitlines removes
+                lines.append("")
+                if "autodoc-process-docstring" in self.app.events.events:
+                    self.app.emit(
+                        "autodoc-process-docstring",
+                        cls.type,
+                        obj.name,
+                        None,
+                        None,
+                        lines,
+                    )
+            obj.docstring = "\n".join(lines)
+            self._record_typehints(obj)
 
             # Parser gives children in source order already
             if self.app.config.autoapi_member_order == "alphabetical":
@@ -399,17 +412,28 @@ class PythonSphinxMapper(SphinxMapperBase):
             yield obj
 
     def _record_typehints(self, obj):
-        if isinstance(
-            obj, (PythonClass, PythonFunction, PythonMethod)
-        ) and not obj.obj.get("overloads"):
+        if (
+            isinstance(obj, (PythonClass, PythonFunction, PythonMethod))
+            and not obj.overloads
+        ) or isinstance(obj, PythonProperty):
             obj_annotations = {}
-            for _, name, annotation, _ in obj.obj["args"]:
+
+            include_return_annotation = True
+            obj_data = obj.obj
+            if isinstance(obj, PythonClass):
+                constructor = obj.constructor
+                if constructor:
+                    include_return_annotation = False
+                    obj_data = constructor.obj
+                else:
+                    return
+
+            for _, name, annotation, _ in obj_data["args"]:
                 if name and annotation:
                     obj_annotations[name] = annotation
 
-            return_annotation = obj.obj.get("return_annotation")
-            if return_annotation:
+            return_annotation = obj_data["return_annotation"]
+            if include_return_annotation and return_annotation:
                 obj_annotations["return"] = return_annotation
 
-            annotations = self.app.env.temp_data.setdefault("annotations", {})
-            annotations[obj.id] = obj_annotations
+            self.app.env.autoapi_annotations[obj.id] = obj_annotations

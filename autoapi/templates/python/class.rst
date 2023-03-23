@@ -1,12 +1,8 @@
 {% if obj.display %}
-.. {{ obj.type }}:: {{ obj.short_name }}{% if obj.args %}({{ obj.args }}){% endif %}
-{% if obj.constructor %}
-
-{% for (args, return_annotation) in obj.constructor.overloads %}
-   {% if args and args.startswith("self, ") %}{% set args = args[6:] %}{% endif %}
+.. py:{{ obj.type }}:: {{ obj.short_name }}{% if obj.args %}({{ obj.args }}){% endif %}
+{% for (args, return_annotation) in obj.overloads %}
    {{ " " * (obj.type | length) }}   {{ obj.short_name }}{% if args %}({{ args }}){% endif %}
 {% endfor %}
-{% endif %}
 
 
    {% if obj.bases %}
@@ -25,7 +21,7 @@
    {% endif %}
    {% endif %}
    {% if obj.docstring %}
-   {{ obj.docstring|prepare_docstring|indent(3) }}
+   {{ obj.docstring|indent(3) }}
    {% endif %}
    {% if "inherited-members" in autoapi_options %}
    {% set visible_classes = obj.classes|selectattr("display")|list %}
@@ -34,6 +30,14 @@
    {% endif %}
    {% for klass in visible_classes %}
    {{ klass.render()|indent(3) }}
+   {% endfor %}
+   {% if "inherited-members" in autoapi_options %}
+   {% set visible_properties = obj.properties|selectattr("display")|list %}
+   {% else %}
+   {% set visible_properties = obj.properties|rejectattr("inherited")|selectattr("display")|list %}
+   {% endif %}
+   {% for property in visible_properties %}
+   {{ property.render()|indent(3) }}
    {% endfor %}
    {% if "inherited-members" in autoapi_options %}
    {% set visible_attributes = obj.attributes|selectattr("display")|list %}
